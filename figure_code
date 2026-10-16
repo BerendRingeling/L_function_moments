@@ -1,0 +1,222 @@
+# SageMath code for Section 6 of
+# Darses--Ringeling--Royer, "On twisted period functions and moments ..."
+#
+# Reproduces:
+#   Section 6.2 : table of m_0,...,m_10 for chi_3, chi_4, chi_5
+#   Section 6.3 : Figure 1 (random primitive characters, prime moduli)
+#   Section 6.4 : Figures 2--4 (Taylor coefficients for conjugate chi_5)
+#
+# Run in a SageMath kernel, or with: sage section6_sagemath.sage
+# Dependencies for Figure 1: numpy and mpmath (normally shipped with Sage).
+
+from sage.all import *
+import random
+import numpy as np
+import mpmath as mp
+
+N_MOMENTS = 10
+N_TAYLOR = 250
+TAYLOR_PREC_BITS = 2400  # ~722 decimal digits: essential for cancellations
+DO_FIGURE_1 = True
+DO_FIGURES_2_TO_4 = True
+
+# Entries indexed by residue 0,...,q-1.
+chi3 = [0, 1, -1]
+chi4 = [0, 1, 0, -1]
+# Section 6.2: chi5(2)=-i, chi5(3)=+i, chi5(4)=-1.
+chi5 = [0, 1, -I, I, -1]
+# Section 6.4 uses the conjugate: chi5bar(2)=+i.
+chi5bar = [0, 1, I, -I, -1]
+
+
+def conjugate_character(chi):
+    return [conjugate(x) for x in chi]
+
+
+def bernoulli_values(q, N):
+    """Exact rational B_{j+1}(a/q), j=0,...,N, a=1,...,q-1."""
+    bern = [bernoulli(k) for k in range(N + 2)]
+    ans = []
+    for j in range(N + 1):
+        n = j + 1
+        row = []
+        for a in range(1, q):
+            x = QQ(a) / q
+            row.append(sum(binomial(n, k) * bern[k] * x**(n-k)
+                           for k in range(n + 1)))
+        ans.append(row)
+    return ans
+
+
+def B_caligraphic(chi, bern_rows, C):
+    """The quantity B_chi(j) of Theorem 1.2, for all available j."""
+    q = len(chi)
+    one_i = C(I)
+    two_pi_i_q = C(2) * C(pi) * one_i * q
+    xi = (C(2) * C(pi) * one_i / q).exp()
+    vals = [C(chi[a]) for a in range(1, q)]
+    tau = sum(vals[a-1] * xi**a for a in range(1, q))
+
+    # Precompute the roots of unity appearing in the finite double sum.
+    roots = [xi**r for r in range(q)]
+    out = []
+    power = C(1)
+    for j, row in enumerate(bern_rows):
+        v = [vals[a-1] * C(row[a-1]) for a in range(1, q)]
+        double_sum = sum(v[a-1] * v[b-1] * roots[(a*b) % q]
+                         for a in range(1, q) for b in range(1, q))
+        out.append(power * double_sum / (tau * (j+1) * factorial(j+1)))
+        power *= two_pi_i_q
+    return out
+
+
+def psi_coefficients(chi, N, prec_bits=320):
+    """Return [psi_{0,chi},...,psi_{N,chi}] from Theorem 1.2."""
+    q = len(chi)
+    C = ComplexField(prec_bits)
+    b = bernoulli_values(q, N)
+    Bchi = B_caligraphic(chi, b, C)
+    Bchibar = B_caligraphic(conjugate_character(chi), b, C)
+    first_factor = C(euler_phi(q)) / (C(2) * C(pi) * C(I) * q)
+
+    psi = []
+    for n in range(N + 1):
+        transform = sum(binomial(n, j) * Bchibar[j]
+                        for j in range(n + 1))
+        value = (first_factor * ((-1)**n) / (n+1)
+                 + Bchi[n] + ((-1)**n) * transform)
+        psi.append(value)
+    return psi
+
+
+def noncentral_stirling(N):
+    """S_{-1/2}(n,k), with S(n+1,k)=S(n,k-1)+(k+1/2)S(n,k)."""
+    S = [[QQ(0) for k in range(N + 1)] for n in range(N + 1)]
+    S[0][0] = QQ(1)
+    for n in range(1, N + 1):
+        for k in range(n + 1):
+            left = S[n-1][k-1] if k > 0 else 0
+            right = S[n-1][k] if k < n else 0
+            S[n][k] = left + (k + QQ(1)/2) * right
+    return S
+
+
+def moments(chi, N=N_MOMENTS, prec_bits=320):
+    """Moments m_N(chi) of |L(1/2+it,chi)|^2/cosh(pi*t)."""
+    q = len(chi)
+    C = ComplexField(prec_bits)
+    # IMPORTANT: Lemma 2.3 identifies A_chi with psi_{conjugate(chi)}.
+    psi = psi_coefficients(conjugate_character(chi), N, prec_bits)
+    S = noncentral_stirling(N)
+    parity = C(chi[q-1])
+    result = []
+    for n in range(N + 1):
+        deriv = sum(S[n][j] * factorial(j) * psi[j]
+                    for j in range(n + 1))
+        mn = -C(2) * parity * C(pi) * C(I)**(1-n) * deriv
+        result.append(mn.real())  # imaginary part is numerical roundoff
+    return result
+
+
+print('Section 6.2: weighted moments')
+m3 = moments(chi3)
+m4 = moments(chi4)
+m5 = moments(chi5)
+print(' n       chi3          chi4          chi5')
+for n in range(N_MOMENTS + 1):
+    print('%2d  %13.9f %13.9f %13.9f' %
+          (n, float(m3[n]), float(m4[n]), float(m5[n])))
+print('Checks: m0(chi3) =', m3[0], ', m0(chi4) =', m4[0])
+assert abs(float(m3[0]) - 0.26360014128128) < 1e-8
+assert abs(float(m4[0]) - 0.5) < 1e-8
+assert abs(float(m5[1]) + 0.04521466371705) < 1e-8
+
+
+# Figure 1: one uniformly sampled nonprincipal (= primitive) character
+# modulo each of the first 100 primes.  We omit p=2, which admits no
+# primitive character of conductor 2.
+def random_primitive_character(p, rng):
+    """Complex128 array chi(a), a=0,...,p-1, for uniformly random chi."""
+    assert p >= 3 and is_prime(p)
+    g = int(GF(p).multiplicative_generator())
+    exponent = rng.randrange(1, p-1)
+    roots = np.exp(complex(0,2) * np.pi * np.arange(p-1)/(p-1))
+    vals = np.zeros(p, dtype=np.complex128)
+    a = 1
+    for r in range(p-1):
+        vals[a] = roots[(exponent*r) % (p-1)]
+        a = (a*g) % p
+    return vals
+
+
+def moment_zero_fft(p, chi_values):
+    """Compute m0 from Theorem 1.2, accelerating its double sum by FFT."""
+    a = np.arange(p)
+    roots = np.exp(complex(0,2) * np.pi * a/p)
+
+    def B0(vals):
+        v = vals * (a/p - 0.5)   # B_1(a/p)
+        v[0] = 0
+        # p*ifft(v)[b] = sum_a v[a]*exp(2*pi*i*a*b/p)
+        double_sum = np.dot(v, p*np.fft.ifft(v))
+        tau = np.dot(vals, roots)
+        return double_sum / tau
+
+    parity = np.real(chi_values[p-1])
+    psi0 = ((p-1)/(complex(0,2)*np.pi*p)
+            + B0(chi_values) + B0(np.conjugate(chi_values)))
+    return float(np.real(-parity * complex(0,2)*np.pi * psi0))
+
+
+def central_L_value(p, chi_values):
+    """Dirichlet L(1/2,chi) via its Hurwitz zeta representation."""
+    s = mp.mpf('0.5')
+    total = mp.mpc(0)
+    for a in range(1, p):
+        z = chi_values[a]
+        total += mp.mpc(float(z.real), float(z.imag)) * mp.zeta(s, mp.mpf(a)/p)
+    return total / mp.sqrt(p)
+
+
+if DO_FIGURE_1:
+    mp.mp.dps = 40
+    rng = random.Random(2026)    # Reproducible random sample
+    pts1 = []
+    for n in range(2, 101):
+        p = int(nth_prime(n))
+        chi = random_primitive_character(p, rng)
+        m0 = moment_zero_fft(p, chi)
+        Lhalf = central_L_value(p, chi)
+        pts1.append((n, m0 / float(abs(Lhalf)**2)))
+    fig1 = list_plot(pts1, color='blue', size=14)
+    fig1.save('section6_figure1.png')
+    print('Saved section6_figure1.png')
+
+
+# Figures 2--4: these use the CONJUGATE of the character in Section 6.2.
+if DO_FIGURES_2_TO_4:
+    print('Calculating psi coefficients up to n=%d at %d-bit precision...'
+          % (N_TAYLOR, TAYLOR_PREC_BITS))
+    psi = psi_coefficients(chi5bar, N_TAYLOR, TAYLOR_PREC_BITS)
+    C = ComplexField(TAYLOR_PREC_BITS)
+
+    # Fig. 2: exp(sqrt(pi*n))*abs(psi_n), 1 <= n <= 250.
+    pts2 = [(n, float(((C(pi)*n).sqrt()).exp() * abs(psi[n])))
+            for n in range(1, N_TAYLOR + 1)]
+    fig2 = list_plot(pts2, color='blue', size=10)
+    fig2.save('section6_figure2.png')
+
+    # Fig. 3: scatter of psi_n in C, 12 <= n <= 250.
+    pts3 = [(float(psi[n].real()), float(psi[n].imag()))
+            for n in range(12, N_TAYLOR + 1)]
+    fig3 = list_plot(pts3, color='blue', size=9, aspect_ratio=1)
+    fig3.save('section6_figure3.png')
+
+    # Fig. 4: imaginary/real ratio for 20 <= n <= 200.
+    pts4 = [(n, float(psi[n].imag()/psi[n].real()))
+            for n in range(20, 201) if psi[n].real() != 0]
+    fig4 = list_plot(pts4, color='blue', size=9)
+    fig4.save('section6_figure4.png', ymin=-2.3, ymax=-0.5)
+
+    print('Saved section6_figure2.png through section6_figure4.png')
+    print('Example: psi_20 =', psi[20])
